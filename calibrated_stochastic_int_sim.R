@@ -234,7 +234,8 @@ fit_vc_bart <- function(alpha_forest, beta_forest, y, prognostic_X, treatment_X,
 ##############################################################################
 # function: bayes_nonparam_nuisance
 # takes in: outcome y, treatment Z, covariates X, Version
-# retuns: 
+# returns: vector pi_hat and posterior draw matrices (num_iter x n) of
+#          pi_hat_distribution, mu1_hat_distribution, mu0_hat_distribution
 # Note: The following versions are: "bart", "softbart", "softbcf"
 bayes_nonparam_nuisance <- function(X, Z, y, Version) {
   if (Version == "bart") {
@@ -359,6 +360,17 @@ bayes_nonparam_nuisance <- function(X, Z, y, Version) {
     return("Not a correct version, see function header")
   }
   
+  # Plot overlap
+ # pi_plot <- ggplot(data.frame(pi_hat = pi_hat, A = factor(Z)), aes(x = pi_hat, fill = A)) +
+   # geom_density(alpha = 0.5) +
+  #  scale_x_continuous(limits = c(0, 1)) +
+  #  labs(title = "Propensity Score Overlap by Treatment",
+  #       x = "pi_hat",
+  #       y = "Density",
+   #      fill = "Treatment") +
+  #  theme_minimal()
+ # print(pi_plot)
+  
   return(list(pi_hat = pi_hat, 
               pi_hat_distribution = pi_hat_distribution, 
               mu0_hat_distribution = mu0_hat, 
@@ -382,10 +394,12 @@ normalize01 <- function(x) {
 ###################################################################################
 # function: bayes_boot
 # takes in: covar X, treatment Z, outcome y, number of bootstrap iterations B,
-#           list from nuisance fit function, delta sequence, and intervention (either "ipsi" or "static")
+#           list from nuisance fit function, delta sequence,
+#.           intervention (either "ipsi" or "static"), reg_X (non transformed)
 # returns: (B x I) matrices psi_delta_matrix and efficient_influence_matrix 
 #.          for the plug-in and one-step estimators respectively.
-bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
+# note:     reg_X only necesary for trans static case
+bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention, reg_X) {
   
   n <- length(Z) 
   I <- length(delta_seq) 
@@ -409,10 +423,7 @@ bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
   if(intervention == "ipsi") {
   for (b in 1:B) {
     # dirchlet distribution is the same as the standardized exponential distribution
-    
-    
     random_exp <- rexp(n)
-    
     random_dirch <- random_exp / sum(random_exp)
     
     pi_hat_sample <- sample(1:size, 1)
@@ -422,8 +433,6 @@ bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
     pi_hat_draw <- pi_hat[pi_hat_sample, ]
     mu0_hat_draw <- mu0_hat[mu_sample, ]
     mu1_hat_draw <- mu1_hat[mu_sample, ]
-
-
     
     for (i in 1:I) {
       delta <- delta_seq[i]
@@ -439,7 +448,6 @@ bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
       efficient_influence_matrix[b, i] <- mean(ratio) + sum(efficient_influence_value * random_dirch)                                                  
     }
     
-    
     ## progress update every 100 iterations
     if (b %% 100 == 0) {
       cat("Finished bootstrap", b, "of", B, "\n")
@@ -448,8 +456,8 @@ bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
     
   }
   } else if (intervention == "static") {
-    # runs same bootstrap as above with different plug-in and eif
-    p_X = p_X(X = X, delta_seq = delta_seq)
+    # runs same bootstrap as above with different plug-in and eif. always uses reg_X for p
+    p_mat = p_X(X = reg_X, delta_seq = delta_seq)
     for (b in 1:B) {
     # dirchlet distribution is the same as the standardized exponential distribution
     
@@ -466,24 +474,16 @@ bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
     mu0_hat_draw <- mu0_hat[mu_sample, ]
     mu1_hat_draw <- mu1_hat[mu_sample, ]
 
-    
-    
     for (i in 1:I) {
-    
-      
-      
-
-      plug_in <- mu1_hat_draw * p_X[,i] + mu0_hat_draw * (1 - p_X[,i])    
+      plug_in <- mu1_hat_draw * p_mat[,i] + mu0_hat_draw * (1 - p_mat[,i])    
 
       psi_delta_matrix[b, i] <- sum(plug_in * random_dirch)
 
       eif_value <- static_efficient_influence(Z, y, pi_hat = pi_hat_draw, mu_1 = mu1_hat_draw, 
-      mu_0 = mu0_hat_draw, p_X = p_X[,i], plug_in)   
+      mu_0 = mu0_hat_draw, p_mat = p_mat[,i], plug_in, index = b)   
 
       efficient_influence_matrix[b, i] <- mean(plug_in) + sum(eif_value * random_dirch) 
     }
-    
-    
     ## progress update every 100 iterations
     if (b %% 100 == 0) {
       cat("Finished bootstrap", b, "of", B, "\n")
@@ -494,8 +494,6 @@ bayes_boot <- function(X, Z, y, B, nuisance_fit, delta_seq, intervention ) {
   } else {
     return("Not correct version. See function defintion.")
   }
-  
-  
   return(list(psi_delta_matrix = psi_delta_matrix, efficient_influence_matrix = efficient_influence_matrix))
 }
 
@@ -526,6 +524,23 @@ ipsi_efficient_influence <- function(Z, y, pi_hat, delta, m_t_1, m_t_0, ratio) {
   y_term <- y_num / y_denom
   
   phi_hat <- score_term * shift_term * cum_weight_term + y_term - mean(ratio)
+  
+  #dQ_num <- Z * delta * pi_hat + (1-Z) * (1-pi_hat)
+  #dQ_denom <- delta * pi_hat + 1 - pi_hat
+  #dQ <- dQ_num / dQ_denom
+  
+  #dP <- pi_hat^Z * (1 - pi_hat)^(1 - Z)
+  
+  # debug
+  #weights <- dQ / dP
+  
+  # Plot the weights
+  #plot(weights, type = "h", 
+  #     main = "Weights dQ / dP",
+  #     xlab = "Index", ylab = "Weight",
+  #     col = "blue", lwd = 2)
+  #abline(h = 1, col = "red", lty = 2)  # reference line at weight = 1
+  
   return(phi_hat)
 }
 
@@ -537,7 +552,7 @@ ipsi_efficient_influence <- function(Z, y, pi_hat, delta, m_t_1, m_t_0, ratio) {
 # takes in: Z, y, pi_hat_draw, delta, m_t, t
 # returns efficient influence function estimate psi_delta
 # note: delta is a vecotr of length 2 for delta1, delta2
-static_efficient_influence <- function(Z, y, pi_hat, mu_1, mu_0, p_X, plug_in) {
+static_efficient_influence <- function(Z, y, pi_hat, mu_1, mu_0, p_mat, plug_in, index) {
   n <- length(Z)
   
   
@@ -548,7 +563,7 @@ static_efficient_influence <- function(Z, y, pi_hat, mu_1, mu_0, p_X, plug_in) {
   mu_Z <- ifelse(Z == 1, mu_1, mu_0)
   
   # dQ(A|X)
-  dQ <- p_X^Z * (1 - p_X)^(1 - Z)
+  dQ <- p_mat^Z * (1 - p_mat)^(1 - Z)
   
   # dP(A|X)
   dP <- pi_hat^Z * (1 - pi_hat)^(1 - Z)
@@ -556,15 +571,28 @@ static_efficient_influence <- function(Z, y, pi_hat, mu_1, mu_0, p_X, plug_in) {
   # EIF
   phi_hat <- plug_in - psi_delta + (dQ / dP) * (y - mu_Z)
   
+  # debug
+  #if (index == 1) {
+
+  #weights <- dQ / dP
+  
+  # Plot the weights
+  #plot(weights, type = "h", 
+       #main = "Weights dQ / dP",
+       #xlab = "Index", ylab = "Weight",
+       #col = "blue", lwd = 2)
+  #abline(h = 1, col = "red", lty = 2)  # reference line at weight = 1
+  
+  #}
   return(phi_hat)
 }
 
 
 
 ##################################################################################
-# function: p_delta 
-# takes in: covariates X, delta_1, delta_2
-# returns vector p_deltas containing delta value for each observation
+# function: p_X 
+# takes in: covariates X, delta_seq
+# returns matrix p_X containing all the delta values
 p_X <- function(X, delta_seq) {
   I <- length(delta_seq)
   n <- nrow(X)
@@ -572,7 +600,12 @@ p_X <- function(X, delta_seq) {
 
   for (i in 1:I) {
     d2_index <- i %% 10 
-    delta_2 <- 0.5 + 0.1 * d2_index              
+    if(d2_index == 0) {
+      delta_2 <- 0.95
+    } else{ 
+      delta_2 <- -0.05 + 0.1 * d2_index
+    }
+                  
     delta_1 <- delta_seq[i] - delta_2  
     
     for (j in 1:n) {
@@ -660,6 +693,16 @@ freq_nonparam_nuisance <- function(dat, K) {
     mu0_hat[test] <- predict(sl_mu, newdata = newdata0)$pred
   }
   
+  # Plot overlap
+ # pi_plot <- ggplot(data.frame(pi_hat = pi_hat, A = factor(dat$a)), aes(x = pi_hat, fill = A)) +
+  #  geom_density(alpha = 0.5) +
+  #  scale_x_continuous(limits = c(0, 1)) +
+   # labs(title = "Propensity Score Overlap by Treatment",
+    #     x = "pi_hat",
+     #    y = "Density",
+      #   fill = "Treatment") +
+  #  theme_minimal()
+  #print(pi_plot)
   return(list(pi_hat = pi_hat, mu1_hat = mu1_hat, mu0_hat = mu0_hat, folds = folds))
 }
 
@@ -698,14 +741,14 @@ mu0_hat <- nuisance$mu0_hat
 # function: plug_in_est_static
 # takes in a data frame, delta,pi_hat, mu1_hat, mu0_hat. 
 # returns psi_hat
-plug_in_est_static <- function(p_X, nuisance) {
+plug_in_est_static <- function(p_mat, nuisance) {
   mu1_hat <- nuisance$mu1_hat
   mu0_hat <- nuisance$mu0_hat
   
-  I <- ncol(p_X)
+  I <- ncol(p_mat)
   psi_hat <- numeric(I)
   for(i in 1:I) {
-    psi_hat[i] <- mean(mu1_hat * p_X[, i] + mu0_hat * (1-p_X[,i]))
+    psi_hat[i] <- mean(mu1_hat * p_mat[, i] + mu0_hat * (1-p_mat[,i]))
   }
   return(psi_hat)
 }
@@ -787,16 +830,16 @@ proposed_est_ipsi <- function(a, y, delta_seq, K, nuisance) {
 ###############################################################
 # function: proposed_est_static
 # takes in a data frame, delta,
-# number of sample splits, pi_hat, mu1_hat, mu0_hat, folds assignment, p_X function.
-# returns: psi_hat
-proposed_est_static <- function(a, y, K, nuisance, p_X) {
+# number of sample splits, pi_hat, mu1_hat, mu0_hat, folds assignment, p_mat function.
+# returns: psi_hat and phi_vals 
+proposed_est_static <- function(a, y, K, nuisance, p_mat) {
   pi_hat <- nuisance$pi_hat
   mu1_hat <- nuisance$mu1_hat
   mu0_hat <- nuisance$mu0_hat
   folds <- nuisance$folds
 
   n <- length(a)
-  I <- ncol(p_X)
+  I <- ncol(p_mat)
 
   phi_vals <- matrix(NA, nrow = n, ncol = I)
   psi_hat <- numeric(I)
@@ -814,22 +857,21 @@ proposed_est_static <- function(a, y, K, nuisance, p_X) {
       pi_hat_test <- pi_hat[test]
       mu1_hat_test <- mu1_hat[test]
       mu0_hat_test<- mu0_hat[test]
-      p_X_test <- p_X[test, i]
+      p_mat_test <- p_mat[test, i]
       # mu(X, A)
       muZ_hat_test <- ifelse(a_test == 1, mu1_hat_test, mu0_hat_test)  
       
       # couldnt think of names
-      first_term <- mu1_hat_test * p_X_test + mu0_hat_test * (1-p_X_test)
-      dQ <- p_X_test^a_test * (1 - p_X_test)^(1 - a_test)
-      second_term <- (dQ / pi_hat_test) * (y_test - muZ_hat_test)
+      first_term <- mu1_hat_test * p_mat_test + mu0_hat_test * (1-p_mat_test)
+      dQ <- p_mat_test^a_test * (1 - p_mat_test)^(1 - a_test)
+      dP <- pi_hat_test^a_test * (1 - pi_hat_test)^(1 - a_test)
+      second_term <- (dQ / dP) * (y_test - muZ_hat_test)
       
 
       phi_vals_test <- first_term + second_term
       psi_k[k] <- mean(phi_vals_test)
       
       phi_vals[test, i] = phi_vals_test
-    
-    
   }
     psi_hat[i] = mean(psi_k)
   }
@@ -871,18 +913,18 @@ IF_ipsi <- function(delta_seq, nuisance) {
 
 ###################################################
 # function: plug_in_est_static
-# takes in a data frame, delta,pi_hat, mu1_hat, mu0_hat. 
+# takes in p_mat and nuisance t. 
 # returns phi_vals
-IF_static <- function(p_X, nuisance) {
+IF_static <- function(p_mat, nuisance) {
   mu1_hat <- nuisance$mu1_hat
   mu0_hat <- nuisance$mu0_hat
 
   n <- length(mu1_hat)
-  I <- ncol(p_X)
+  I <- ncol(p_mat)
   phi_vals <- matrix(NA, nrow = n, ncol = I)
   
   for (i in 1:I) {
-     phi_vals[,i] <- mu1_hat * p_X[,i] + mu0_hat * (1-p_X[,i])
+     phi_vals[,i] <- mu1_hat * p_mat[,i] + mu0_hat * (1-p_mat[,i])
   } 
   return(phi_vals)
 }
@@ -1066,11 +1108,11 @@ psi_true_static <- function(delta_seq) {
   
   mu0 <- 200
   mu1 <- mu0 + 10 + 13.7 * (2*X_big[,1] + X_big[,2] + X_big[,3] + X_big[,4])
-  p_X = p_X(X_big, delta_seq)
+  p_mat = p_X(X_big, delta_seq)
 
   # to itearate over delta sequence
   for (i in 1:I) {
-    true_psi[i] <- mean(mu1 * p_X[,i] + mu0 * (1-p_X[,i]))
+    true_psi[i] <- mean(mu1 * p_mat[,i] + mu0 * (1-p_mat[,i]))
   }
   return(true_psi)
 }
@@ -1148,9 +1190,8 @@ compute_simulation <- function(n, I, J, Version) {
   
   # always uses seed 42 internally
   ipsi_psi_true <- psi_true_ipsi(Delta_seq = ipsi_delta_seq) 
-  print(ipsi_psi_true)
   static_psi_true <- psi_true_static(static_delta_seq)
-  print(static_psi_true)
+  
   # seed setting
   sim_seed = 70 + J
   set.seed(sim_seed)
@@ -1167,9 +1208,9 @@ compute_simulation <- function(n, I, J, Version) {
   trans_y <- trans_sim[,2]
   trans_X <- trans_sim[,3:6]
   
-  reg_p_X <- p_X(X = X, delta_seq = static_delta_seq)
-  trans_p_X <- p_X(X = trans_X, delta_seq = static_delta_seq)
-  print("hi1")
+  reg_p_mat <- p_X(X = X, delta_seq = static_delta_seq)
+
+ 
   
   # frequentist uses a different series of functions compared to bayesian 
   # im jerry rigging two seperate sims 
@@ -1184,8 +1225,8 @@ compute_simulation <- function(n, I, J, Version) {
     ipsi_reg_psi_hat <- plug_in_est_ipsi(a = Z, y = y, delta_seq = ipsi_delta_seq, nuisance = reg_freq_nuisance)
     ipsi_trans_psi_hat <- plug_in_est_ipsi(a = Z, y = y, delta_seq = ipsi_delta_seq, nuisance = trans_freq_nuisance)
 
-    static_reg_psi_hat <- plug_in_est_static(p_X = reg_p_X, nuisance = reg_freq_nuisance)
-    static_trans_psi_hat <- plug_in_est_static(p_X = trans_p_X, nuisance = trans_freq_nuisance)
+    static_reg_psi_hat <- plug_in_est_static(p_mat = reg_p_mat, nuisance = reg_freq_nuisance)
+    static_trans_psi_hat <- plug_in_est_static(p_mat = reg_p_mat, nuisance = trans_freq_nuisance)
 
     ipsi_reg_efficient_psi_hat_container <- proposed_est_ipsi(a = Z, y = y, delta_seq = ipsi_delta_seq, K = 2, nuisance = reg_freq_nuisance)
     ipsi_trans_efficient_psi_hat_container <- proposed_est_ipsi(a = Z, y = y, delta_seq = ipsi_delta_seq, K = 2, nuisance = trans_freq_nuisance)
@@ -1193,8 +1234,8 @@ compute_simulation <- function(n, I, J, Version) {
     ipsi_reg_efficient_psi_hat <- ipsi_reg_efficient_psi_hat_container$psi_hat
     ipsi_trans_efficient_psi_hat <- ipsi_trans_efficient_psi_hat_container$psi_hat
 
-    static_reg_efficient_psi_hat_container <- proposed_est_static(a = Z, y = y, K = 2, nuisance = reg_freq_nuisance, p_X = reg_p_X)
-    static_trans_efficient_psi_hat_container <- proposed_est_static(a = Z, y = y, K = 2, nuisance = trans_freq_nuisance, p_X = trans_p_X)
+    static_reg_efficient_psi_hat_container <- proposed_est_static(a = Z, y = y, K = 2, nuisance = reg_freq_nuisance, p_mat = reg_p_mat)
+    static_trans_efficient_psi_hat_container <- proposed_est_static(a = Z, y = y, K = 2, nuisance = trans_freq_nuisance, p_mat = reg_p_mat)
 
     static_reg_efficient_psi_hat <- static_reg_efficient_psi_hat_container$psi_hat
     static_trans_efficient_psi_hat <- static_trans_efficient_psi_hat_container$psi_hat
@@ -1203,8 +1244,8 @@ compute_simulation <- function(n, I, J, Version) {
     ipsi_reg_if <- IF_ipsi(delta_seq = ipsi_delta_seq, nuisance = reg_freq_nuisance)
     ipsi_trans_if <- IF_ipsi(delta_seq = ipsi_delta_seq, nuisance = trans_freq_nuisance)
 
-    static_reg_if <- IF_static(p_X = reg_p_X, nuisance = reg_freq_nuisance)
-    static_trans_if <- IF_static(p_X = trans_p_X, nuisance = trans_freq_nuisance)
+    static_reg_if <- IF_static(p_mat = reg_p_mat, nuisance = reg_freq_nuisance)
+    static_trans_if <- IF_static(p_mat = reg_p_mat, nuisance = trans_freq_nuisance)
 
     # ipsi
     ipsi_reg_coverage <- frequentist_coverage(phi_vals = ipsi_reg_if,
@@ -1238,9 +1279,9 @@ compute_simulation <- function(n, I, J, Version) {
 
 # ipsi
   ipsi_reg_psi_matrix <- bayes_boot(X = X, Z = Z, y = y, B = 10000, nuisance_fit = reg_nuisance,
-   delta_seq = ipsi_delta_seq, intervention = "ipsi")
+   delta_seq = ipsi_delta_seq, intervention = "ipsi", reg_X = X)
   ipsi_trans_psi_matrix <- bayes_boot(X = trans_X, Z = Z, y = y, B = 10000, nuisance_fit = trans_nuisance,
-   delta_seq = ipsi_delta_seq, intervention = "ipsi")
+   delta_seq = ipsi_delta_seq, intervention = "ipsi", reg_X = X)
 
   ipsi_reg_psi_hat <- colMeans(ipsi_reg_psi_matrix$psi_delta_matrix)
   ipsi_trans_psi_hat <- colMeans(ipsi_trans_psi_matrix$psi_delta_matrix)
@@ -1256,9 +1297,9 @@ compute_simulation <- function(n, I, J, Version) {
  
  #static
   static_reg_psi_matrix <- bayes_boot(X = X, Z = Z, y = y, B = 10000, nuisance_fit = reg_nuisance,
-   delta_seq = static_delta_seq, intervention = "static")
+   delta_seq = static_delta_seq, intervention = "static", reg_X = X)
   static_trans_psi_matrix <- bayes_boot(X = trans_X, Z = Z, y = y, B = 10000, nuisance_fit = trans_nuisance,
-   delta_seq = static_delta_seq, intervention = "static")
+   delta_seq = static_delta_seq, intervention = "static", reg_X = X)
 
   static_reg_psi_hat <- colMeans(static_reg_psi_matrix$psi_delta_matrix)
   static_trans_psi_hat <- colMeans(static_trans_psi_matrix$psi_delta_matrix)
@@ -1302,8 +1343,8 @@ sim_id <- as.numeric(commandArgs(TRUE))
 #sim_id <- 42
 
 # manual change for each run
-Size = "n1"
-n = 500
+Size = "n3"
+n = 5000
 
 # different estimator runs
 

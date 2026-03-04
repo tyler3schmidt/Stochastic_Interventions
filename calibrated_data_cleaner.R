@@ -45,9 +45,9 @@ delta_sequence_static <- function(I) {
 
 
 ##################################################################################
-# function: p_delta 
-# takes in: covariates X, delta_1, delta_2
-# returns vector p_deltas containing delta value for each observation
+# function: p_X 
+# takes in: covariates X, delta_seq
+# returns matrix p_X containing all the delta values
 p_X <- function(X, delta_seq) {
   I <- length(delta_seq)
   n <- nrow(X)
@@ -55,7 +55,12 @@ p_X <- function(X, delta_seq) {
   
   for (i in 1:I) {
     d2_index <- i %% 10 
-    delta_2 <- 0.5 + 0.1 * d2_index              
+    if(d2_index == 0) {
+      delta_2 <- 0.95
+    } else{ 
+      delta_2 <- -0.05 + 0.1 * d2_index
+    }
+    
     delta_1 <- delta_seq[i] - delta_2  
     
     for (j in 1:n) {
@@ -130,11 +135,11 @@ psi_true_static <- function(delta_seq) {
   
   mu0 <- 200
   mu1 <- mu0 + 10 + 13.7 * (2*X_big[,1] + X_big[,2] + X_big[,3] + X_big[,4])
-  p_X = p_X(X_big, delta_seq)
+  p_mat = p_X(X_big, delta_seq)
   
   # to itearate over delta sequence
   for (i in 1:I) {
-    true_psi[i] <- mean(mu1 * p_X[,i] + mu0 * (1-p_X[,i]))
+    true_psi[i] <- mean(mu1 * p_mat[,i] + mu0 * (1-p_mat[,i]))
   }
   return(true_psi)
 }
@@ -422,10 +427,11 @@ data_cleaner <- function(n, I, J, Version, Size) {
     static_trans_efficient_rmse = static_trans_efficient_rmse
   ))
 }
-Version = "bart"
-Size = "n1"
+Version = "softbcf"
+Size = "n3"
 
-data <- data_cleaner(n = 500, I = 100, J = 500, Version, Size)
+data <- data_cleaner(n = 5000, I = 100, J = 500, Version, Size)
 
 filename <- paste0(Version, "_",Size, "_completed_data.rds")
 saveRDS(data, file=filename)
+
