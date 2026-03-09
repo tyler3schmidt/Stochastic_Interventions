@@ -5,7 +5,7 @@
 library(nhanesA)
 library(dplyr)
 library(tidyr)
-
+library(SoftBart)
 
 ###########################################################################################
 # function: normalize01
