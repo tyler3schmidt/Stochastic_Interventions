@@ -1,3 +1,8 @@
 # Bayesian_IPSI
+This repository contains all the code for the simulation studies and applied section in the paper Calibratied Bayesian Inference for Stochastic Interventions Effects.
 
-This repository contains all the code for the simulation studies and applied section in the paper Calibratied Bayesian Inference for Stochastic Causal Interventions.
+## Sim Study
+The main code is contained in the file calibrated_stochastic_int_sim.R. This file only runs one simulation, meaning this must be called 500 times to complete the study. The code is written in a functional style, meaning that only the function compute_simulation(n, I, J, Version) should be directly called. Here n is the sample size, I denotes the number of delta values, J is the sim number to set the seed, and Version should be either frequentist, bart, softbart, or softbcf. Note that the static case breaks if I doesnt equal 100, but IPSI works for any positive integer. To fix the static case, one must modify the delta_sequence_static(I) and p_X(X, delta_seq) functions. The simulation study was run on the Argon High Performance Computing cluster at the University of Iowa on a 128-core CPU server. A single run for n=500 takes approximately 1 hour with n = 5,000 taking several hours. 
+
+## Applied Study
+The main code for the applied study is aptly named applied_study. This code heavily utilizes the nhanesA r package to obtain the data. The r package dplyr is then used to combine the seperate data sources and build the cleaned data set. The code then calls fit_probit() and fit_softbart() which are the propensity score and outcome regression functions respectively. Then the bayes_boot() function is used to obtain posterior estimates. This model fitting was completed on a MacBook Pro, taking around 30 minutes. The remaining code simply produces the plots seen in the paper. 
